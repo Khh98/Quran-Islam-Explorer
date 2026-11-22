@@ -1,0 +1,15 @@
+# Secrets: never commit API keys
+.streamlit/secrets.toml
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Old version wrote lesson audio next to the app
+*_arabic_explanation.mp3
+
+.DS_Store
+Thumbs.db

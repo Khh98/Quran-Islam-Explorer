@@ -1,0 +1,16 @@
+[theme]
+base = "dark"
+primaryColor = "#d4a857"
+backgroundColor = "#0b0d12"
+secondaryBackgroundColor = "#1a1d26"
+textColor = "#f5f1e8"
+
+[server]
+# Serves the background images from /static (cached by the browser = fast on mobile)
+enableStaticServing = true
+
+[client]
+toolbarMode = "minimal"
+
+[browser]
+gatherUsageStats = false
