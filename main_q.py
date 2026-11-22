@@ -13,7 +13,7 @@ from streamlit_lottie import st_lottie
 
 import lesson
 from content import (AYAH_OF_DAY, FEATURED_VIDEOS, LESSON_LANG_LABEL, PROPHETS, RECITERS, UI,
-                     VERSE_RECITERS, VOICES)
+                     VERSE_RECITERS)
 from quran import (BASMALA, ayah_audio_url, fetch_surah_text, load_verses, num, reference, surah,
                    surah_label, verses_block)
 
@@ -282,7 +282,6 @@ def page_explain():
 
 def generate_lesson(n: int, lesson_lang: str, voice_key: str, rid: str):
     model = lesson.get_secret("OPENAI_MODEL", lesson.DEFAULT_MODEL)
-    voice = VOICES[lesson_lang][voice_key]
     reciter = VERSE_RECITER_BY_ID[rid]
     stage = "text_failed"
     with st.status(t("step_text"), expanded=False) as status:
@@ -290,13 +289,15 @@ def generate_lesson(n: int, lesson_lang: str, voice_key: str, rid: str):
             fetch_surah_text(n)
             stage = "ai_error"
             status.update(label=t("step_plan"))
-            plan = lesson.plan_lesson(n, lesson_lang, model)
+            plan = lesson.plan_lesson(n, lesson_lang, model, lesson.PROMPT_VERSION)
             stage = "tts_error"
             status.update(label=t("step_voice"))
-            lesson.tts_segments(tuple(lesson.narration_texts(plan, lesson_lang)), voice)
+            narration, fallback = lesson.narrate(tuple(lesson.narration_texts(plan, lesson_lang)),
+                                                 lesson_lang, voice_key)
             stage = "audio_error"
             status.update(label=t("step_recite"))
-            audio, seconds = lesson.lesson_audio(n, lesson_lang, voice, reciter, model)
+            spans = tuple((p["from"], p["to"]) for p in plan["passages"])
+            audio, seconds = lesson.mix_lesson(n, spans, reciter, tuple(narration))
         except Exception:
             log.exception("lesson generation failed at %s", stage)
             status.update(label=t("step_failed"), state="error")
@@ -304,7 +305,7 @@ def generate_lesson(n: int, lesson_lang: str, voice_key: str, rid: str):
             return
         status.update(label=t("step_done"), state="complete")
     st.session_state.lesson = {"selection": (n, lesson_lang, voice_key, rid), "plan": plan,
-                               "audio": audio, "seconds": seconds}
+                               "audio": audio, "seconds": seconds, "fallback": fallback}
 
 
 def render_lesson(data: dict):
@@ -324,6 +325,8 @@ def render_lesson(data: dict):
         st.audio(data["audio"], format="audio/mpeg")
         st.download_button(t("download", ll), data=data["audio"], mime="audio/mpeg",
                            file_name=f"{n:03d}-{meta['en'].replace(' ', '_')}-lesson-{ll}.mp3")
+        if data.get("fallback"):
+            st.caption("⚠️ " + t("voice_fallback", ll))
 
     parts = [f'<div class="qcard"><p class="explain" dir="{direction}">{esc(plan["intro"])}</p></div>',
              f'<h2 class="section-title" dir="{direction}">{esc(t("key_verses", ll))}</h2>']
@@ -389,9 +392,8 @@ def page_prophets():
             if st.button(t("listen_story"), key=f"story_tts_{i}"):
                 text = f"{prophet_name(p, lg)}. {p['story_' + lg]} " + " ".join(p["lessons_" + lg])
                 try:
-                    audio = lesson.tts_segments((text.replace("ﷺ", "صلى الله عليه وسلم" if lg == "ar"
-                                                              else "peace be upon him"),),
-                                                VOICES[lg]["male"])[0]
+                    text = text.replace("ﷺ", "صلى الله عليه وسلم" if lg == "ar" else "peace be upon him")
+                    audio = lesson.narrate((text,), lg, "male")[0][0]
                     st.audio(audio, format="audio/mpeg", autoplay=True)
                 except Exception:
                     log.exception("story tts failed")

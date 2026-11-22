@@ -66,6 +66,7 @@ UI = {
         "audio_error": "Couldn't download the recitation. Please try again or choose another Qari.",
         "disclaimer": "AI-generated explanation guided by classical tafsir. The verses are the authentic Uthmani text with real recitation. For deeper study, refer to trusted scholars and tafsir books such as Ibn Kathir and Al-Sa'di.",
         "lesson_cached_note": "Lessons are saved, so the next person who opens the same surah gets it instantly.",
+        "voice_fallback": "The storyteller voice was unavailable, so this lesson uses the standard voice. Try again later.",
         # Prophets
         "prophets_title": "Stories of the Prophets",
         "prophets_sub": "Their journeys, a verse from the Quran, and practical lessons we can apply in our lives today. Tap a prophet to open his story.",
@@ -136,6 +137,7 @@ UI = {
         "audio_error": "تعذّر تحميل التلاوة. حاول مرة أخرى أو اختر قارئاً آخر.",
         "disclaimer": "شرح مولّد بالذكاء الاصطناعي ومسترشد بكتب التفسير المعتمدة. نص الآيات بالرسم العثماني وبتلاوة حقيقية. وللتعمّق ارجع إلى العلماء الثقات وكتب التفسير مثل ابن كثير والسعدي.",
         "lesson_cached_note": "تُحفظ الدروس، فيحصل من يفتح السورة نفسها بعدك على الدرس فوراً.",
+        "voice_fallback": "لم يتوفر صوت الراوي القصصي، فاستُخدم الصوت العادي في هذا الدرس. حاول مرة أخرى لاحقاً.",
         # Prophets
         "prophets_title": "قصص الأنبياء",
         "prophets_sub": "رحلاتهم، وآية من القرآن، ودروس عملية نطبّقها في حياتنا اليوم. اضغط على اسم النبي لتقرأ قصته.",
@@ -151,7 +153,11 @@ UI = {
 
 LESSON_LANG_LABEL = {"ar": "العربية", "en": "English"}
 
-# Edge-TTS voices (all free). Arabic voices are Saudi MSA, English are US.
+# Storyteller narration (OpenAI speech model, uses your OPENAI_API_KEY).
+# Other voices to try: ash, ballad, coral, echo, fable, nova, onyx, sage, shimmer, verse, alloy.
+OPENAI_VOICES = {"male": "cedar", "female": "marin"}
+
+# Free fallback voices (edge-tts), used only if the storyteller voice is unavailable.
 VOICES = {
     "ar": {"male": "ar-SA-HamedNeural", "female": "ar-AE-FatimaNeural"},
     "en": {"male": "en-US-AndrewNeural", "female": "en-US-AvaNeural"},
