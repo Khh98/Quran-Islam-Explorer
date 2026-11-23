@@ -9,7 +9,7 @@ understanding its surahs, and learning from the stories of the Prophets.
 |---|---|
 | **Home** | Welcome note, animation, and an *Ayah of the Day* (authentic text + recitation, changes daily). |
 | **Listen** | Full-surah recitations by handpicked Qaris; surah and Qari names in Arabic and English; *read along* with the Uthmani text plus Sahih International (English) or Tafsir al-Muyassar (Arabic). |
-| **Explain** | A ~3 minute audio lesson: AI selects the key verses from the real surah text, a real Qari recites them, and a narrator explains them in Arabic or English. One MP3 you can play or download, plus a written transcript. |
+| **Explain** | A ~3 minute audio lesson: AI selects the key verses from the real surah text, a real Qari recites them, and a warm storyteller voice explains them in Arabic or English. One MP3 you can play or download, plus a written transcript. |
 | **Prophets** | 16 prophets: story, a verse from the Quran (with recitation), practical life lessons, and a "listen to the story" button. |
 
 Language and page are kept in the URL, so links like `…/?page=prophets&lang=ar` can be shared.
@@ -38,7 +38,8 @@ Only the **Explain** page needs the OpenAI key; everything else works without it
    ```toml
    OPENAI_API_KEY = "sk-proj-..."
    ```
-   Optionally add `OPENAI_MODEL = "..."` to switch models without touching code.
+   Optionally add `OPENAI_MODEL = "..."` (lesson writer) or `OPENAI_TTS_MODEL = "..."` (narrator voice)
+   to switch models without touching code.
 4. Deploy. No `packages.txt` is needed: ffmpeg comes from the `imageio-ffmpeg` pip package.
 
 ## Project layout
@@ -62,9 +63,22 @@ tools/build_data.py  Regenerates data/ and static/ (run if you add verses or cha
 - Each passage links to **Tafsir al-Muyassar** for reference.
 - Lessons are cached on disk per surah and language, so repeat visits are instant and cost nothing.
 
+## Narrator voice
+
+Lessons and the Prophets' "listen to the story" button use OpenAI's expressive speech model,
+directed to sound like a calm, heartfelt storyteller with correct classical Arabic (*fusha*).
+The male/female voices are set in `OPENAI_VOICES` in `content.py` (`cedar` / `marin` by default).
+
+- **Model retirement:** OpenAI has announced that `gpt-4o-mini-tts` shuts down on **2027-01-06**.
+  When they name a successor, set `OPENAI_TTS_MODEL` in your Streamlit secrets; no code change is needed.
+- **Automatic fallback:** if the storyteller voice fails (outage, quota, retired model), the lesson is still
+  created with the free edge-tts voice and a small notice appears under the player.
+- **Cost:** roughly a few US cents of narration per new lesson; repeat visits are served from cache.
+
 ## Customising
 
 - **Wording or translations:** edit `content.py`.
+- **Narrator voices:** change `OPENAI_VOICES` in `content.py` (other options: ash, ballad, coral, echo, fable, nova, onyx, sage, shimmer, verse, alloy).
 - **Add a Qari:** add an entry to `RECITERS` (full surahs from mp3quran.net) or `VERSE_RECITERS` (verse-by-verse from cdn.islamic.network) in `content.py`.
 - **Add a prophet or Ayah of the Day:** add it to `content.py`, add the verse reference to `tools/build_data.py`, then run `python tools/build_data.py`.
 - **Background images:** replace `tools/image_original.jpg` / `tools/background_original.jpg` and run the build script.

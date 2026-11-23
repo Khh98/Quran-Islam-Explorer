@@ -2,14 +2,18 @@
 Surah audio lessons.
 
 Flow:  real surah text (API)  ->  AI chooses key passages + writes a spoken explanation
-       ->  a real Qari recites those verses  ->  edge-tts narrates the explanation
+       ->  a real Qari recites those verses  ->  a storyteller voice narrates the explanation
        ->  ffmpeg stitches everything into ONE mp3 (about 3 minutes).
 
 The AI never writes Quran verses itself: the verse text shown is the authentic
 Uthmani text and the verses you hear are recited by a real Qari.
+
+Narration uses OpenAI's expressive speech model (steered to a warm storyteller
+tone) and falls back to the free edge-tts voices if that isn't available.
 """
 import asyncio
 import json
+import logging
 import os
 import re
 import shutil
@@ -22,9 +26,17 @@ import edge_tts
 import requests
 import streamlit as st
 
+from content import OPENAI_VOICES, VOICES
 from quran import ayah_audio_url, fetch_surah_text, surah
 
+log = logging.getLogger("quran_app")
+
 DEFAULT_MODEL = "gpt-5.6-sol"
+# OpenAI has announced this model's shutdown for 2027-01-06. When they name a successor,
+# set OPENAI_TTS_MODEL in the Streamlit secrets; no code change needed. If the model
+# stops working, lessons automatically fall back to the free edge-tts voices.
+DEFAULT_TTS_MODEL = "gpt-4o-mini-tts-2025-12-15"
+PROMPT_VERSION = 2  # bump when the lesson prompt changes, so cached lessons are regenerated
 
 
 # ---------------------------------------------------------------------------
@@ -51,20 +63,25 @@ def _client(api_key: str):
 # ---------------------------------------------------------------------------
 # 1) AI lesson plan
 # ---------------------------------------------------------------------------
+_STORYTELLER = ("Write it as a warm storyteller would tell it: vivid but simple language, natural connecting words, "
+                "and the occasional gentle question to the listener, so it flows when read aloud.")
 _LANG_RULES = {
     "ar": ("Write everything in clear, simple Modern Standard Arabic (فصحى ميسّرة) for a general audience. "
+           f"{_STORYTELLER} Use natural Arabic connectors such as ثم، فـ، وهكذا. "
+           "Add tashkeel (diacritics) to any word that could be misread, so the narrator pronounces it correctly "
+           "in classical Arabic; you don't need to vowelize every letter. "
            "Write «النبي صلى الله عليه وسلم» in full, never as a symbol. "
            "Start each explanation with the overall meaning of the recited verses, then the deeper insight."),
     "en": ("Write everything in clear, warm, simple English for a general audience, including new Muslims and "
-           "non-Muslims. Use Arabic terms sparingly and explain them. Write 'the Prophet, peace be upon him' in full, "
-           "never as a symbol. Start each explanation by conveying the meaning of the recited verses in your own "
-           "words, because the listener may not understand Arabic."),
+           f"non-Muslims. {_STORYTELLER} Use Arabic terms sparingly and explain them. Write 'the Prophet, peace be "
+           "upon him' in full, never as a symbol. Start each explanation by conveying the meaning of the recited "
+           "verses in your own words, because the listener may not understand Arabic."),
 }
-# Length calibration (measured): narration ~115 words/min in Arabic and ~150 in English;
+# Length calibration: narration ~110 words/min in Arabic and ~145 in English at a storyteller's pace;
 # a Qari like Alafasy recites ~0.85 Quran words per second. Targets give a ~3-3.5 minute lesson.
 _WORDS = {
-    "ar": {"intro": "30-45", "expl": "30-50", "lesson": "8-14", "closing": "15-25", "total": "200-260"},
-    "en": {"intro": "40-55", "expl": "40-60", "lesson": "10-16", "closing": "18-28", "total": "240-320"},
+    "ar": {"intro": "28-40", "expl": "28-45", "lesson": "8-12", "closing": "14-22", "total": "180-240"},
+    "en": {"intro": "38-50", "expl": "38-55", "lesson": "10-15", "closing": "16-25", "total": "220-300"},
 }
 WHOLE_SURAH_MAX_WORDS = 45   # surahs up to this length are recited in full (Al-Kawthar ... Al-'Adiyat)
 RECITATION_MAX_WORDS = 90    # hard safety cap (~100 s); the prompt itself asks for ~60 words (~70 s)
@@ -192,8 +209,9 @@ def _validate(plan: dict, ayahs: list[dict]) -> dict:
 
 
 @st.cache_data(persist="disk", show_spinner=False)
-def plan_lesson(n: int, lang: str, model: str) -> dict:
-    """Cached on disk: each surah/language is generated once, then served instantly."""
+def plan_lesson(n: int, lang: str, model: str, version: int) -> dict:
+    """Cached on disk: each surah/language is generated once, then served instantly.
+    `version` (PROMPT_VERSION) is part of the cache key, so prompt changes regenerate lessons."""
     import openai
 
     ayahs = fetch_surah_text(n)
@@ -213,8 +231,53 @@ def plan_lesson(n: int, lang: str, model: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 2) Narration (edge-tts)
+# 2) Narration: storyteller voice (OpenAI), free edge-tts as fallback
 # ---------------------------------------------------------------------------
+_VOICE_DIRECTION = {
+    "ar": """Voice: a warm, wise storyteller narrating an Islamic lesson in Modern Standard Arabic (fusha).
+Pronunciation: clear, correct classical Arabic. Pronounce every letter fully, especially ع ح ق ض ظ ط, follow the diacritics, and never use a dialect or a foreign accent.
+Tone: calm, gentle, heartfelt and reverent, like a beloved teacher telling a meaningful story to people they care about. Slightly softer and more reverent when mentioning Allah or the Prophet, peace be upon him.
+Pacing: unhurried and natural, with short pauses at commas and fuller pauses between sentences. Never rushed, never monotone.
+Avoid: sounding like a news announcer, an advertisement, or a robot.""",
+    "en": """Voice: a warm, wise storyteller narrating an Islamic lesson in clear English.
+Pronunciation: natural and clear. Pronounce Arabic words and names (Allah, Quran, Surah names, prophets' names) with correct Arabic pronunciation.
+Tone: calm, gentle, heartfelt and reverent, like a beloved teacher telling a meaningful story to people they care about. Slightly softer when mentioning Allah or the Prophet, peace be upon him.
+Pacing: unhurried and natural, with short pauses at commas and fuller pauses between sentences. Never rushed, never monotone.
+Avoid: sounding like a news announcer, an advertisement, or a robot.""",
+}
+
+
+def tts_model() -> str:
+    return get_secret("OPENAI_TTS_MODEL", DEFAULT_TTS_MODEL)
+
+
+@st.cache_data(show_spinner=False, max_entries=200)
+def _openai_tts_batch(texts: tuple[str, ...], voice: str, model: str, direction: str) -> list[bytes]:
+    """Expressive narration from OpenAI's speech model, steered by `direction`. Errors are not cached."""
+    client = _client(get_secret("OPENAI_API_KEY"))
+
+    def speak(text: str) -> bytes:
+        audio = client.audio.speech.create(model=model, voice=voice, input=text,
+                                           instructions=direction, response_format="mp3").read()
+        if not audio:
+            raise RuntimeError("empty audio from OpenAI")
+        return audio
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        return list(pool.map(speak, texts))
+
+
+def narrate(texts: tuple[str, ...], lang: str, gender: str) -> tuple[list[bytes], str | None]:
+    """Returns (mp3 clips, fallback_reason). fallback_reason is None when the storyteller voice was used
+    (or when there is no OpenAI key at all, where the free voice is the expected choice)."""
+    if has_api_key():
+        try:
+            return _openai_tts_batch(texts, OPENAI_VOICES[gender], tts_model(), _VOICE_DIRECTION[lang]), None
+        except Exception as e:
+            log.warning("storyteller voice failed, using edge-tts: %s", e)
+            return _edge_tts_batch(texts, VOICES[lang][gender]), f"{type(e).__name__}: {e}"[:300]
+    return _edge_tts_batch(texts, VOICES[lang][gender]), None
+
 _ORDINALS = {"ar": ["أولاً", "ثانياً", "ثالثاً", "رابعاً"], "en": ["First", "Second", "Third", "Fourth"]}
 _LESSONS_INTRO = {"ar": "ومن الدروس العملية التي نتعلّمها من هذه السورة.",
                   "en": "Here are some practical lessons we can take from this surah."}
@@ -244,7 +307,7 @@ async def _tts_one(text: str, voice: str, sem: asyncio.Semaphore) -> bytes:
         for attempt in range(3):
             try:
                 buf = bytearray()
-                async for chunk in edge_tts.Communicate(text, voice).stream():
+                async for chunk in edge_tts.Communicate(text, voice, rate="-5%").stream():
                     if chunk["type"] == "audio":
                         buf.extend(chunk["data"])
                 if buf:
@@ -256,7 +319,8 @@ async def _tts_one(text: str, voice: str, sem: asyncio.Semaphore) -> bytes:
 
 
 @st.cache_data(show_spinner=False, max_entries=120)
-def tts_segments(texts: tuple[str, ...], voice: str) -> list[bytes]:
+def _edge_tts_batch(texts: tuple[str, ...], voice: str) -> list[bytes]:
+    """Free Microsoft neural voices (fallback)."""
     async def run():
         sem = asyncio.Semaphore(3)
         return await asyncio.gather(*(_tts_one(t, voice, sem) for t in texts))
@@ -306,17 +370,16 @@ def _download_all(urls: list[str]) -> list[bytes]:
 
 
 @st.cache_data(show_spinner=False, max_entries=40)
-def lesson_audio(n: int, lang: str, voice: str, reciter: dict, model: str) -> tuple[bytes, float]:
-    """The final lesson mp3 (cached per surah / language / voice / Qari)."""
-    plan = plan_lesson(n, lang, model)
-    narration = tts_segments(tuple(narration_texts(plan, lang)), voice)
+def mix_lesson(n: int, spans: tuple[tuple[int, int], ...], reciter: dict,
+               narration: tuple[bytes, ...]) -> tuple[bytes, float]:
+    """The final lesson mp3: narration[0], passage 1, narration[1], passage 2, ... (cached)."""
     ayahs = {a["a"]: a for a in fetch_surah_text(n)}
 
     # Recitation clips: Basmala before a passage that starts the surah (not for Al-Fatihah / At-Tawbah).
     groups = []
-    for p in plan["passages"]:
-        nums = [ayahs[a]["g"] for a in range(p["from"], p["to"] + 1)]
-        if p["from"] == 1 and n not in (1, 9):
+    for start, end in spans:
+        nums = [ayahs[a]["g"] for a in range(start, end + 1)]
+        if start == 1 and n not in (1, 9):
             nums = [1] + nums  # 1:1 is the Basmala
         groups.append(nums)
     flat = [g for grp in groups for g in grp]
